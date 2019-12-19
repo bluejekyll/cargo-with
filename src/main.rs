@@ -17,7 +17,7 @@ const COMMAND_DESCRIPTION: &str =
 
 fn main() {
     match try_main() {
-        Ok(v) => unreachable(v),
+        Ok(()) => std::process::exit(0),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -26,7 +26,7 @@ fn main() {
 }
 
 // Make a separate runner to print errors using Display instead of Debug
-fn try_main() -> Result<Void, Error> {
+fn try_main() -> Result<(), Error> {
     env_logger::init();
 
     let app = create_app();
@@ -36,12 +36,19 @@ fn try_main() -> Result<Void, Error> {
 
     let (with_cmd, cargo_cmd) = process_matches(&matches)?;
     // TODO: This should also be a void return type
-    let artifact_path = cargo_cmd.run()?.artifact()?;
-    let artifact = artifact_path
-        .to_str()
-        .ok_or_else(|| err_msg("Binary path is not valid utf-8"))?;
-    let mut finalized_with_cmd = with_cmd.child_command(artifact)?;
-    exec(&mut finalized_with_cmd)
+    let artifact_paths = cargo_cmd.run()?.artifact()?;
+    for artifact_path in artifact_paths {
+        let artifact = artifact_path
+            .to_str()
+            .ok_or_else(|| err_msg("Binary path is not valid utf-8"))?;
+        let mut finalized_with_cmd = with_cmd.child_command(artifact)?;
+        let code = exec(&mut finalized_with_cmd)?;
+        if code != 0 {
+            std::process::exit(code)
+        }
+    }
+
+    Ok(())
 }
 
 /// Process command line arguments. The input is split up into three
@@ -102,20 +109,12 @@ EXAMPLES:
         .settings(&[AppSettings::SubcommandRequired])
 }
 
-#[cfg(unix)]
-fn exec(command: &mut Command) -> Result<Void, Error> {
-    use std::os::unix::process::CommandExt;
-    Err(command.exec())?
-}
-
-#[cfg(not(unix))]
-fn exec(command: &mut Command) -> Result<Void, Error> {
-    std::process::exit(
-        command
-            .status()?
-            .code()
-            .expect("Process terminated by signal"),
-    )
+fn exec(command: &mut Command) -> Result<i32, Error> {
+    println!("Executing with: {:?}", command);
+    Ok(command
+        .status()?
+        .code()
+        .expect("Process terminated by signal"))
 }
 
 #[cfg(test)]
@@ -182,7 +181,12 @@ mod tests {
                 let matches = create_app().get_matches_from(*evoc);
                 let (with_cmd, cargo_cmd) = process_matches(&matches).unwrap();
                 let artifact_path = cargo_cmd.run().unwrap().artifact().unwrap();
-                let artifact = artifact_path
+                assert_eq!(
+                    artifact_path.len(),
+                    1,
+                    "For run we only expected 1 executable path"
+                );
+                let artifact = artifact_path[0]
                     .to_str()
                     .ok_or_else(|| err_msg("Binary path is not valid utf-8"))
                     .unwrap();
@@ -201,7 +205,12 @@ mod tests {
                 if let Ok(matches) = create_app().get_matches_from_safe(*evoc) {
                     if let Ok((with_cmd, cargo_cmd)) = process_matches(&matches) {
                         let artifact_path = cargo_cmd.run().unwrap().artifact().unwrap();
-                        let artifact = artifact_path
+                        assert_eq!(
+                            artifact_path.len(),
+                            1,
+                            "For run we only expected 1 executable path"
+                        );
+                        let artifact = artifact_path[0]
                             .to_str()
                             .ok_or_else(|| err_msg("Binary path is not valid utf-8"))
                             .unwrap();

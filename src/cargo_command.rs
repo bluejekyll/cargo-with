@@ -61,7 +61,7 @@ impl<'a> CargoCmd<'a> {
 
     /// Run the cargo command and get the output back as a vector
     pub(crate) fn run(&self) -> Result<CargoBuildOutput, Error> {
-        debug!(
+        println!(
             "Executing `cargo {}`",
             self.args().collect::<Vec<_>>().join(" ")
         );
@@ -201,14 +201,14 @@ struct Target {
 }
 
 impl<'a> CargoBuildOutput<'a> {
-    pub(crate) fn artifact(&self) -> Result<PathBuf, Error> {
-        Ok(self.select_buildopt()?.artifact())
+    pub(crate) fn artifact(&self) -> Result<Vec<PathBuf>, Error> {
+        Ok(self.select_buildopt()?)
     }
 
     /// Selects the buildopt which fits with the requirements
     ///
     /// If there are multiple possible candidates, this will return an error
-    fn select_buildopt(&self) -> Result<&CargoBuildOutputElement, Error> {
+    fn select_buildopt(&self) -> Result<Vec<PathBuf>, Error> {
         // Target kinds we want to look for
         let look_for = &[TargetKind::Bin, TargetKind::Example, TargetKind::Test];
 
@@ -233,33 +233,51 @@ impl<'a> CargoBuildOutput<'a> {
         // We expect exactly one candidate; everything else is an error
         match candidates.as_slice() {
             [] => Err(err_msg("No suitable build artifacts found.")),
-            [ref the_one] => Ok(the_one),
+            [ref the_one] => Ok(vec![the_one.artifact()]),
             the_many => {
-                // Use some effort to create a pretty list of candidates.
-                let many_fmt = the_many
-                    .iter()
-                    .map(|opt| {
-                        format!(
-                            "- {} ({}){}\n",
-                            opt.package_id,
-                            opt.target
-                                .kind
-                                .iter()
-                                .map(|k| k.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                            if opt.profile.test { " [test]" } else { "" }
-                        )
-                    })
-                    .collect::<String>();
+                if self.cmd.kind == CmdKind::Test {
+                    let many_tests = candidates
+                        .into_iter()
+                        .filter(|opt| {
+                            opt.target.kind.iter().any(|kind| match kind {
+                                TargetKind::Test
+                                | TargetKind::Example
+                                | TargetKind::Bin
+                                | TargetKind::Lib => true,
+                                _ => false,
+                            })
+                        })
+                        .map(|cmd| cmd.artifact())
+                        .collect::<_>();
 
-                Err(format_err!(
+                    Ok(many_tests)
+                } else {
+                    // Use some effort to create a pretty list of candidates.
+
+                    let many_fmt = the_many
+                        .iter()
+                        .map(|opt| {
+                            format!(
+                                "- {} ({})\n",
+                                opt.package_id,
+                                opt.target
+                                    .kind
+                                    .iter()
+                                    .map(|k| k.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            )
+                        })
+                        .collect::<String>();
+
+                    Err(format_err!(
                     concat!(
                         "Found several artifact candidates:\n{}\nTo be more specific use `--test`, ",
                         "`--bin`, `--lib` or `--examples` based on which binary you want to examine."
                     ),
                     many_fmt
                 ))
+                }
             }
         }
     }
